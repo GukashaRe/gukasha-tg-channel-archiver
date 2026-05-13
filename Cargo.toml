@@ -18,4 +18,5 @@ overflow-checks = false
 panic = "abort"
 lto = "thin"
 incremental = true
-debug = false
+debug = 0
+codegen-units = 2
