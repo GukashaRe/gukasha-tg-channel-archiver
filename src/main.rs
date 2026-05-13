@@ -44,7 +44,7 @@
 // path = "data/monitor.db"
 
 use reqwest::{Client, Proxy};
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -202,10 +202,8 @@ fn parse_messages(html: &str, limit: usize) -> Result<Vec<Message>, Box<dyn Erro
 
     let msg_selector = Selector::parse("div.tgme_widget_message_wrap")?;
 
-    let text_selector_primary =
-        Selector::parse("div.tgme_widget_message_text.js-message_text")?;
-    let text_selector_fallback =
-        Selector::parse("div.tgme_widget_message_text")?;
+    let text_selector_primary = Selector::parse("div.tgme_widget_message_text.js-message_text")?;
+    let text_selector_fallback = Selector::parse("div.tgme_widget_message_text")?;
 
     let time_selector = Selector::parse("time")?;
     let views_selector = Selector::parse("span.tgme_widget_message_views")?;
@@ -299,10 +297,7 @@ fn init_db(db_path: &str) -> Result<Connection, Box<dyn Error>> {
         [],
     );
 
-    let _ = conn.execute(
-        "ALTER TABLE messages ADD COLUMN deleted_at TEXT",
-        [],
-    );
+    let _ = conn.execute("ALTER TABLE messages ADD COLUMN deleted_at TEXT", []);
 
     let _ = conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(deleted)",
@@ -353,27 +348,14 @@ fn store_new_messages(
         )?;
 
         for msg in messages {
-            let exists: i64 =
-                exists_stmt.query_row(params![msg.id, msg.url], |row| row.get(0))?;
+            let exists: i64 = exists_stmt.query_row(params![msg.id, msg.url], |row| row.get(0))?;
 
             if exists == 0 {
-                insert_stmt.execute(params![
-                    msg.id,
-                    msg.time,
-                    msg.views,
-                    msg.text,
-                    msg.url
-                ])?;
+                insert_stmt.execute(params![msg.id, msg.time, msg.views, msg.text, msg.url])?;
                 inserted += 1;
             } else {
                 // Refresh content and clear deleted flag if message reappears.
-                revive_stmt.execute(params![
-                    msg.id,
-                    msg.time,
-                    msg.views,
-                    msg.text,
-                    msg.url
-                ])?;
+                revive_stmt.execute(params![msg.id, msg.time, msg.views, msg.text, msg.url])?;
             }
         }
     }
@@ -388,12 +370,9 @@ fn mark_deleted_messages(
     conn: &Connection,
     current_messages: &[Message],
 ) -> Result<usize, Box<dyn Error>> {
-    let current_ids: HashSet<&str> =
-        current_messages.iter().map(|m| m.id.as_str()).collect();
+    let current_ids: HashSet<&str> = current_messages.iter().map(|m| m.id.as_str()).collect();
 
-    let mut stmt = conn.prepare(
-        "SELECT id FROM messages WHERE deleted = 0"
-    )?;
+    let mut stmt = conn.prepare("SELECT id FROM messages WHERE deleted = 0")?;
 
     let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
 
@@ -445,11 +424,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let html = fetch_html(&client, &config.channel).await?;
     let messages = parse_messages(&html, limit)?;
 
-    let storage_enabled = config
-        .storage
-        .as_ref()
-        .map(|s| s.enabled)
-        .unwrap_or(false);
+    let storage_enabled = config.storage.as_ref().map(|s| s.enabled).unwrap_or(false);
 
     // Archive mode.
     if args.store || storage_enabled {
@@ -464,11 +439,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         let inserted = store_new_messages(&mut conn, &messages)?;
         let deleted = mark_deleted_messages(&conn, &messages)?;
 
-        println!(
-            "新增 {} 条消息，标记删除 {} 条消息",
-            inserted,
-            deleted
-        );
+        println!("新增 {} 条消息，标记删除 {} 条消息", inserted, deleted);
 
         return Ok(());
     }
