@@ -1,5 +1,9 @@
+/*
+ * © 2026 GukashaRe. All rights reserved. This source code is provided for personal and educational use only. Commercial use and redistribution require explicit permission.
+ */
+
 use reqwest::{Client, Proxy};
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
