@@ -4,10 +4,18 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-reqwest = { version = "0.12", features = ["rustls-tls", "socks", "gzip", "brotli", "deflate"] }
+reqwest = { version = "0.13", features = ["rustls", "socks", "gzip", "brotli", "deflate"] }
 tokio = { version = "1", features = ["full"] }
 scraper = "0.24"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.9"
-rusqlite = { version = "0.37", features = ["bundled"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
+
+[profile.release]
+opt-level = 3
+overflow-checks = false
+panic = "abort"
+lto = "thin"
+incremental = true
+debug = false

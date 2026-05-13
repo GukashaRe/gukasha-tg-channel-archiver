@@ -1,5 +1,5 @@
 channel = "funofrprx"
-max_messages = 20
+max_messages = 70
 pretty_json = true
 
 [proxy]
