@@ -1,38 +1,3 @@
-// src/main.rs
-//
-// Cargo.toml:
-//
-// [package]
-// name = "tg_fetcher"
-// version = "0.1.0"
-// edition = "2024"
-//
-// [dependencies]
-// reqwest = { version = "0.12", features = ["rustls-tls", "socks"] }
-// tokio = { version = "1", features = ["full"] }
-// scraper = "0.24"
-// serde = { version = "1", features = ["derive"] }
-// serde_json = "1"
-// toml = "0.9"
-// rusqlite = { version = "0.37", features = ["bundled"] }
-//
-// config.toml:
-//
-// channel = "funofrprx"
-// max_messages = 50
-// pretty_json = true
-//
-// [proxy]
-// enabled = true
-// url = "socks5h://127.0.0.1:10808"
-//
-// [user_agent]
-// value = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0"
-//
-// [storage]
-// enabled = true
-// path = "data/monitor.db"
-
 use reqwest::{Client, Proxy};
 use rusqlite::{Connection, params};
 use scraper::{ElementRef, Html, Selector};
@@ -420,15 +385,6 @@ fn store_new_messages(
     tx.commit()?;
     Ok(inserted)
 }
-
-// =========================
-// Mark Deleted Messages
-// =========================
-//
-// 注意：Telegram 公开页面通常只展示最近一段消息。
-// 为避免误判，建议 max_messages 设置得尽可能大（例如 100~200）。
-//
-
 fn mark_deleted_messages(
     conn: &Connection,
     current_messages: &[Message],
