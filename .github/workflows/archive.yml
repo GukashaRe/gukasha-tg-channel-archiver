@@ -13,6 +13,8 @@ env:
 jobs:
   archive:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # 允许创建 Release
 
     steps:
       - name: Checkout code
