@@ -26,7 +26,6 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          # 缓存 target 目录和 cargo registry
           shared-key: "rust-release-cache"
 
       - name: Build project
@@ -36,15 +35,14 @@ jobs:
         run: mkdir -p data
 
       - name: Run archiver
-        # 直接运行，不需要代理，不需要环境变量
-        run: ./target/release/tg_fetcher
+        # 使用 cargo run，不需要关心二进制文件名
+        run: cargo run --release
 
       - name: Check if database exists and has content
         id: check_db
         run: |
           if [ -f data/monitor.db ] && [ -s data/monitor.db ]; then
             echo "DB_EXISTS=true" >> $GITHUB_ENV
-            # 获取数据库中的消息数量（假设你的表叫 messages）
             COUNT=$(sqlite3 data/monitor.db "SELECT COUNT(*) FROM messages;" 2>/dev/null || echo "0")
             echo "DB_COUNT=$COUNT" >> $GITHUB_ENV
           else
