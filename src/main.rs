@@ -477,8 +477,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let client = build_client(&config)?;
 
-
-
     let html = fetch_html(&client, &config.channel).await?;
     let messages = parse_messages(&html)?;
 
