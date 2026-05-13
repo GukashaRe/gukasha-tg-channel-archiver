@@ -1,0 +1,93 @@
+name: Archive TG Channel
+
+on:
+  schedule:
+    # 每天 UTC 00:00 (北京时间 08:00) 运行
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+  # 允许手动触发
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          profile: minimal
+          override: true
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Build project
+        run: cargo build --release
+
+      - name: Create data directory
+        run: mkdir -p data
+
+      - name: Run archiver
+        # 直接运行，不需要代理，不需要环境变量
+        run: ./target/release/tg_checker
+
+      - name: Check if database exists and has content
+        id: check_db
+        run: |
+          if [ -f data/monitor.db ] && [ -s data/monitor.db ]; then
+            echo "DB_EXISTS=true" >> $GITHUB_ENV
+            # 获取数据库中的消息数量（假设你的表叫 messages）
+            COUNT=$(sqlite3 data/monitor.db "SELECT COUNT(*) FROM messages;" 2>/dev/null || echo "0")
+            echo "DB_COUNT=$COUNT" >> $GITHUB_ENV
+          else
+            echo "DB_EXISTS=false" >> $GITHUB_ENV
+          fi
+
+      - name: Upload database as artifact (for debug)
+        if: env.DB_EXISTS == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tg-archive-db-${{ github.run_number }}
+          path: data/monitor.db
+          retention-days: 30
+
+      - name: Create timestamped database copy
+        if: env.DB_EXISTS == 'true'
+        run: |
+          DATE=$(date +'%Y%m%d_%H%M%S')
+          cp data/monitor.db "archive_${DATE}.db"
+          echo "ARCHIVE_FILE=archive_${DATE}.db" >> $GITHUB_ENV
+
+      - name: Create GitHub Release
+        if: env.DB_EXISTS == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: "archive_${{ github.run_number }}_${{ github.run_id }}"
+          name: "TG Archive ${{ github.run_number }}"
+          body: |
+            ## TG 频道归档
+
+            - 触发方式: ${{ github.event_name == 'schedule' && '定时任务 (UTC 00:00)' || '手动触发' }}
+            - 数据库记录数: ${{ env.DB_COUNT }}
+            - 运行 ID: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+
+            **注意**: 本归档仅包含指定 TG 频道的**公开消息**。
+          files: ${{ env.ARCHIVE_FILE }}
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
