@@ -3,7 +3,7 @@ max_messages = 20
 pretty_json = true
 
 [proxy]
-enabled = true
+enabled = false
 url = "socks5h://127.0.0.1:10808"
 
 [user_agent]
