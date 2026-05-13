@@ -51,7 +51,6 @@ use std::time::Duration;
 #[derive(Debug, Deserialize)]
 struct Config {
     channel: String,
-    max_messages: Option<usize>,
     pretty_json: Option<bool>,
     proxy: Option<ProxyConfig>,
     user_agent: Option<UserAgentConfig>,
@@ -220,7 +219,7 @@ fn collect_image_urls(msg: ElementRef) -> Vec<String> {
 // Parse Messages
 // =========================
 
-fn parse_messages(html: &str, limit: usize) -> Result<Vec<Message>, Box<dyn Error>> {
+fn parse_messages(html: &str) -> Result<Vec<Message>, Box<dyn Error>> {
     let document = Html::parse_document(html);
 
     let msg_selector = Selector::parse("div.tgme_widget_message_wrap")?;
@@ -234,7 +233,7 @@ fn parse_messages(html: &str, limit: usize) -> Result<Vec<Message>, Box<dyn Erro
 
     let mut messages = Vec::new();
 
-    for msg in document.select(&msg_selector).take(limit) {
+    for msg in document.select(&msg_selector) {
         let text = msg
             .select(&text_selector_primary)
             .next()
@@ -478,14 +477,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let client = build_client(&config)?;
 
-    let mut limit = config.max_messages.unwrap_or(50);
 
-    if let Some(n) = args.since {
-        limit = n;
-    }
 
     let html = fetch_html(&client, &config.channel).await?;
-    let messages = parse_messages(&html, limit)?;
+    let messages = parse_messages(&html)?;
 
     let storage_enabled = config.storage.as_ref().map(|s| s.enabled).unwrap_or(false);
 
