@@ -1,15 +1,5 @@
 // src/main.rs
 //
-// Telegram Public Channel Fetcher with:
-// - Anonymous fetch via https://t.me/s/<channel>
-// - TOML config
-// - HTTP / SOCKS5 proxy
-// - SQLite archive
-// - Incremental updates
-// - Deleted message detection
-// - --store
-// - --since N (only process most recent N fetched messages)
-//
 // Cargo.toml:
 //
 // [package]
@@ -28,7 +18,7 @@
 //
 // config.toml:
 //
-// channel = "rustlang"
+// channel = "funofrprx"
 // max_messages = 50
 // pretty_json = true
 //
@@ -45,7 +35,7 @@
 
 use reqwest::{Client, Proxy};
 use rusqlite::{Connection, params};
-use scraper::{Html, Selector};
+use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::env;
@@ -92,7 +82,7 @@ struct StorageConfig {
 #[derive(Debug, Default)]
 struct Args {
     store: bool,
-    since: Option<usize>, // only process latest N fetched messages
+    since: Option<usize>, // 仅处理最近 N 条
 }
 
 fn parse_args() -> Args {
@@ -127,6 +117,7 @@ struct Message {
     views: String,
     text: String,
     url: String,
+    image_urls: Vec<String>,
 }
 
 // =========================
@@ -155,7 +146,8 @@ fn build_client(config: &Config) -> Result<Client, Box<dyn Error>> {
         .gzip(true)
         .brotli(true)
         .deflate(true)
-        .tcp_keepalive(Duration::from_secs(30));
+        .tcp_keepalive(Duration::from_secs(30))
+        .timeout(Duration::from_secs(60));
 
     if let Some(proxy) = &config.proxy {
         if proxy.enabled {
@@ -184,10 +176,10 @@ async fn fetch_html(client: &Client, channel: &str) -> Result<String, Box<dyn Er
 }
 
 // =========================
-// HTML Parsing
+// HTML Helpers
 // =========================
 
-fn collect_text(element: scraper::ElementRef) -> String {
+fn collect_text(element: ElementRef) -> String {
     element
         .text()
         .collect::<Vec<_>>()
@@ -196,6 +188,37 @@ fn collect_text(element: scraper::ElementRef) -> String {
         .collect::<Vec<_>>()
         .join(" ")
 }
+
+fn extract_background_image_url(style: &str) -> Option<String> {
+    let marker = "url(";
+    let start = style.find(marker)? + marker.len();
+    let end = style[start..].find(')')? + start;
+
+    let raw = &style[start..end];
+
+    Some(raw.trim().trim_matches('"').trim_matches('\'').to_string())
+}
+
+fn collect_image_urls(msg: ElementRef) -> Vec<String> {
+    let selector = Selector::parse("a.tgme_widget_message_photo_wrap").unwrap();
+    let mut urls = Vec::new();
+
+    for photo in msg.select(&selector) {
+        if let Some(style) = photo.value().attr("style") {
+            if let Some(url) = extract_background_image_url(style) {
+                if !urls.contains(&url) {
+                    urls.push(url);
+                }
+            }
+        }
+    }
+
+    urls
+}
+
+// =========================
+// Parse Messages
+// =========================
 
 fn parse_messages(html: &str, limit: usize) -> Result<Vec<Message>, Box<dyn Error>> {
     let document = Html::parse_document(html);
@@ -239,9 +262,16 @@ fn parse_messages(html: &str, limit: usize) -> Result<Vec<Message>, Box<dyn Erro
             .unwrap_or("")
             .to_string();
 
-        let id = url.rsplit('/').next().unwrap_or("").to_string();
+        let id = url
+            .trim_end_matches('/')
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .to_string();
 
-        if text.is_empty() && time.is_empty() {
+        let image_urls = collect_image_urls(msg);
+
+        if text.is_empty() && time.is_empty() && image_urls.is_empty() {
             continue;
         }
 
@@ -251,6 +281,7 @@ fn parse_messages(html: &str, limit: usize) -> Result<Vec<Message>, Box<dyn Erro
             views,
             text,
             url,
+            image_urls,
         });
     }
 
@@ -258,7 +289,7 @@ fn parse_messages(html: &str, limit: usize) -> Result<Vec<Message>, Box<dyn Erro
 }
 
 // =========================
-// SQLite
+// SQLite Init
 // =========================
 
 fn init_db(db_path: &str) -> Result<Connection, Box<dyn Error>> {
@@ -278,20 +309,26 @@ fn init_db(db_path: &str) -> Result<Connection, Box<dyn Error>> {
             views TEXT NOT NULL,
             text TEXT NOT NULL,
             url TEXT NOT NULL UNIQUE,
+            image_urls TEXT NOT NULL DEFAULT '[]',
             first_seen TEXT NOT NULL DEFAULT (datetime('now')),
             deleted INTEGER NOT NULL DEFAULT 0,
             deleted_at TEXT
         );
 
         CREATE INDEX IF NOT EXISTS idx_messages_time
-        ON messages(time);
+            ON messages(time);
 
         CREATE INDEX IF NOT EXISTS idx_messages_deleted
-        ON messages(deleted);
+            ON messages(deleted);
         "#,
     )?;
 
-    // Automatic migration for older databases.
+    // 兼容旧数据库
+    let _ = conn.execute(
+        "ALTER TABLE messages ADD COLUMN image_urls TEXT NOT NULL DEFAULT '[]'",
+        [],
+    );
+
     let _ = conn.execute(
         "ALTER TABLE messages ADD COLUMN deleted INTEGER NOT NULL DEFAULT 0",
         [],
@@ -299,16 +336,13 @@ fn init_db(db_path: &str) -> Result<Connection, Box<dyn Error>> {
 
     let _ = conn.execute("ALTER TABLE messages ADD COLUMN deleted_at TEXT", []);
 
-    let _ = conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_messages_deleted ON messages(deleted)",
-        [],
-    );
-
     Ok(conn)
 }
 
-// Insert only new messages. If a previously deleted message reappears,
-// reset deleted=0 and clear deleted_at.
+// =========================
+// Store New Messages
+// =========================
+
 fn store_new_messages(
     conn: &mut Connection,
     messages: &[Message],
@@ -327,13 +361,20 @@ fn store_new_messages(
         let mut insert_stmt = tx.prepare(
             r#"
             INSERT INTO messages (
-                id, time, views, text, url, deleted, deleted_at
+                id,
+                time,
+                views,
+                text,
+                url,
+                image_urls,
+                deleted,
+                deleted_at
             )
-            VALUES (?1, ?2, ?3, ?4, ?5, 0, NULL)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, 0, NULL)
             "#,
         )?;
 
-        let mut revive_stmt = tx.prepare(
+        let mut update_stmt = tx.prepare(
             r#"
             UPDATE messages
             SET
@@ -341,6 +382,7 @@ fn store_new_messages(
                 views = ?3,
                 text = ?4,
                 url = ?5,
+                image_urls = ?6,
                 deleted = 0,
                 deleted_at = NULL
             WHERE id = ?1 OR url = ?5
@@ -348,14 +390,30 @@ fn store_new_messages(
         )?;
 
         for msg in messages {
+            let image_urls_json = serde_json::to_string(&msg.image_urls)?;
+
             let exists: i64 = exists_stmt.query_row(params![msg.id, msg.url], |row| row.get(0))?;
 
             if exists == 0 {
-                insert_stmt.execute(params![msg.id, msg.time, msg.views, msg.text, msg.url])?;
+                insert_stmt.execute(params![
+                    msg.id,
+                    msg.time,
+                    msg.views,
+                    msg.text,
+                    msg.url,
+                    image_urls_json
+                ])?;
                 inserted += 1;
             } else {
-                // Refresh content and clear deleted flag if message reappears.
-                revive_stmt.execute(params![msg.id, msg.time, msg.views, msg.text, msg.url])?;
+                // 若消息重新出现，自动清除 deleted 标记
+                update_stmt.execute(params![
+                    msg.id,
+                    msg.time,
+                    msg.views,
+                    msg.text,
+                    msg.url,
+                    image_urls_json
+                ])?;
             }
         }
     }
@@ -364,8 +422,14 @@ fn store_new_messages(
     Ok(inserted)
 }
 
-// Mark messages as deleted if they were previously visible (deleted=0)
-// but are absent from the current fetched snapshot.
+// =========================
+// Mark Deleted Messages
+// =========================
+//
+// 注意：Telegram 公开页面通常只展示最近一段消息。
+// 为避免误判，建议 max_messages 设置得尽可能大（例如 100~200）。
+//
+
 fn mark_deleted_messages(
     conn: &Connection,
     current_messages: &[Message],
@@ -382,7 +446,7 @@ fn mark_deleted_messages(
         let id = row?;
 
         if !current_ids.contains(id.as_str()) {
-            conn.execute(
+            let changed = conn.execute(
                 r#"
                 UPDATE messages
                 SET
@@ -394,7 +458,9 @@ fn mark_deleted_messages(
                 params![id],
             )?;
 
-            deleted_count += 1;
+            if changed > 0 {
+                deleted_count += 1;
+            }
         }
     }
 
@@ -412,21 +478,18 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let client = build_client(&config)?;
 
-    let mut limit = config.max_messages.unwrap_or(20);
+    let mut limit = config.max_messages.unwrap_or(50);
 
-    // --since N means only process the latest N fetched messages.
     if let Some(n) = args.since {
         limit = n;
     }
-
-    let pretty_json = config.pretty_json.unwrap_or(true);
 
     let html = fetch_html(&client, &config.channel).await?;
     let messages = parse_messages(&html, limit)?;
 
     let storage_enabled = config.storage.as_ref().map(|s| s.enabled).unwrap_or(false);
 
-    // Archive mode.
+    // 存档模式
     if args.store || storage_enabled {
         let db_path = config
             .storage
@@ -444,8 +507,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Ok(());
     }
 
-    // Normal mode: print fetched messages.
-    if pretty_json {
+    // 普通模式：输出 JSON
+    let pretty = config.pretty_json.unwrap_or(true);
+
+    if pretty {
         println!("{}", serde_json::to_string_pretty(&messages)?);
     } else {
         println!("{}", serde_json::to_string(&messages)?);
