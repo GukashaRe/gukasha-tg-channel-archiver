@@ -1,0 +1,14 @@
+channel = "funofrprx"
+max_messages = 20
+pretty_json = true
+
+[proxy]
+enabled = true
+url = "socks5h://127.0.0.1:10808"
+
+[user_agent]
+value = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:150.0) Gecko/20100101 Firefox/150.0"
+
+[storage]
+enabled = true
+path = "data/monitor.db"
