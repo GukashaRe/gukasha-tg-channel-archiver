@@ -1,27 +1,6 @@
 /*
  * © 2026 GukashaRe. All rights reserved. This source code is provided for personal and educational use only. Commercial use and redistribution require explicit permission.
  */
-
-/*
- * © 2026 GukashaRe. All rights reserved. This source code is provided for personal and educational use only. Commercial use and redistribution require explicit permission.
- */
-
-/*
- * © 2026 GukashaRe. All rights reserved. This source code is provided for personal and educational use only. Commercial use and redistribution require explicit permission.
- */
-
-/*
- * © 2026 GukashaRe. All rights reserved. This source code is provided for personal and educational use only. Commercial use and redistribution require explicit permission.
- */
-
-/*
- * © 2026 GukashaRe. All rights reserved. This source code is provided for personal and educational use only. Commercial use and redistribution require explicit permission.
- */
-
-/*
- * © 2026 GukashaRe. All rights reserved. This source code is provided for personal and educational use only. Commercial use and redistribution require explicit permission.
- */
-
 use reqwest::{Client, Proxy};
 use rusqlite::{params, Connection};
 use scraper::{ElementRef, Html, Selector};
