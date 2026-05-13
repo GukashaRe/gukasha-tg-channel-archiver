@@ -2,6 +2,26 @@
  * © 2026 GukashaRe. All rights reserved. This source code is provided for personal and educational use only. Commercial use and redistribution require explicit permission.
  */
 
+/*
+ * © 2026 GukashaRe. All rights reserved. This source code is provided for personal and educational use only. Commercial use and redistribution require explicit permission.
+ */
+
+/*
+ * © 2026 GukashaRe. All rights reserved. This source code is provided for personal and educational use only. Commercial use and redistribution require explicit permission.
+ */
+
+/*
+ * © 2026 GukashaRe. All rights reserved. This source code is provided for personal and educational use only. Commercial use and redistribution require explicit permission.
+ */
+
+/*
+ * © 2026 GukashaRe. All rights reserved. This source code is provided for personal and educational use only. Commercial use and redistribution require explicit permission.
+ */
+
+/*
+ * © 2026 GukashaRe. All rights reserved. This source code is provided for personal and educational use only. Commercial use and redistribution require explicit permission.
+ */
+
 use reqwest::{Client, Proxy};
 use rusqlite::{params, Connection};
 use scraper::{ElementRef, Html, Selector};
@@ -61,11 +81,7 @@ fn parse_args() -> Args {
         match arg.as_str() {
             "--store" => args.store = true,
             "--since" => {
-                if let Some(v) = iter.next() {
-                    if let Ok(n) = v.parse::<usize>() {
-                        args.since = Some(n);
-                    }
-                }
+                args.since = iter.next().and_then(|v| v.parse::<usize>().ok());
             }
             _ => {}
         }
@@ -116,13 +132,9 @@ fn build_client(config: &Config) -> Result<Client, Box<dyn Error>> {
         .deflate(true)
         .tcp_keepalive(Duration::from_secs(30))
         .timeout(Duration::from_secs(60));
-
-    if let Some(proxy) = &config.proxy {
-        if proxy.enabled {
-            builder = builder.proxy(Proxy::all(&proxy.url)?);
-        }
+    if let Some(proxy) = config.proxy.as_ref().filter(|p| p.enabled) {
+        builder = builder.proxy(Proxy::all(&proxy.url)?);
     }
-
     Ok(builder.build()?)
 }
 
@@ -172,12 +184,13 @@ fn collect_image_urls(msg: ElementRef) -> Vec<String> {
     let mut urls = Vec::new();
 
     for photo in msg.select(&selector) {
-        if let Some(style) = photo.value().attr("style") {
-            if let Some(url) = extract_background_image_url(style) {
-                if !urls.contains(&url) {
-                    urls.push(url);
-                }
-            }
+        if let Some(url) = photo
+            .value()
+            .attr("style")
+            .and_then(extract_background_image_url)
+            .filter(|url| !urls.contains(url))
+        {
+            urls.push(url);
         }
     }
 
@@ -261,12 +274,12 @@ fn parse_messages(html: &str) -> Result<Vec<Message>, Box<dyn Error>> {
 // =========================
 
 fn init_db(db_path: &str) -> Result<Connection, Box<dyn Error>> {
-    if let Some(parent) = Path::new(db_path).parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
+    if let Some(parent) = Path::new(db_path)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
     }
-
     let conn = Connection::open(db_path)?;
 
     conn.execute_batch(
