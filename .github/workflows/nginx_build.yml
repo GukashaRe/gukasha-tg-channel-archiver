@@ -8,6 +8,10 @@ on:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+      packages: write
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -32,7 +36,7 @@ jobs:
           echo "version=$NGINX_VERSION" >> $GITHUB_OUTPUT
           echo "Selected Nginx version: $NGINX_VERSION"
 
-      - name: Download and build OpenSSL 3.2 (with PQC support)
+      - name: Download and build OpenSSL 3.2
         run: |
           cd /tmp
           wget https://github.com/openssl/openssl/releases/download/openssl-3.2.0/openssl-3.2.0.tar.gz
@@ -75,9 +79,7 @@ jobs:
             --with-cc-opt="-I/usr/local/openssl-pqc/include -Wno-error=implicit-function-declaration" \
             --with-ld-opt="-L/usr/local/openssl-pqc/lib -Wl,-rpath,/usr/local/openssl-pqc/lib"
           
-          # 移除 -Werror 避免编译错误
           sed -i 's/-Werror//g' auto/cc/gcc
-          
           make -j$(nproc)
 
       - name: Test Nginx binary
@@ -93,9 +95,11 @@ jobs:
           cp nginx-$NGINX_VERSION/objs/nginx nginx-pqc/usr/local/nginx-pqc/
           cp -r nginx-$NGINX_VERSION/conf nginx-pqc/usr/local/nginx-pqc/
           
-          echo '#!/bin/bash' > nginx-pqc/start-nginx.sh
-          echo 'export LD_LIBRARY_PATH=/usr/local/openssl-pqc/lib:$LD_LIBRARY_PATH' >> nginx-pqc/start-nginx.sh
-          echo 'exec /usr/local/nginx-pqc/nginx -c /usr/local/nginx-pqc/conf/nginx.conf "$@"' >> nginx-pqc/start-nginx.sh
+          cat > nginx-pqc/start-nginx.sh << 'EOF'
+          #!/bin/bash
+          export LD_LIBRARY_PATH=/usr/local/openssl-pqc/lib:$LD_LIBRARY_PATH
+          exec /usr/local/nginx-pqc/nginx -c /usr/local/nginx-pqc/conf/nginx.conf "$@"
+          EOF
           
           chmod +x nginx-pqc/start-nginx.sh
           tar -czf nginx-pqc-linux-amd64.tar.gz nginx-pqc/
@@ -120,3 +124,5 @@ jobs:
           files: nginx-pqc-linux-amd64.tar.gz
           draft: false
           prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
