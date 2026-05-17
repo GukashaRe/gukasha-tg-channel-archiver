@@ -36,28 +36,33 @@ jobs:
           echo "version=$NGINX_VERSION" >> $GITHUB_OUTPUT
           echo "Selected Nginx version: $NGINX_VERSION"
 
-      - name: Get latest OpenSSL stable version
-        id: openssl-latest
-        run: |
-          # 获取 OpenSSL 官方最新稳定版
-          OPENSSL_PAGE=$(curl -s https://www.openssl.org/source/)
-          OPENSSL_TAR=$(echo "$OPENSSL_PAGE" | grep -oP 'openssl-\d+\.\d+\.\d+[a-z]?\.tar\.gz' | sort -V | tail -1)
-          OPENSSL_VERSION=$(echo "$OPENSSL_TAR" | sed 's/openssl-//' | sed 's/\.tar\.gz//')
-          echo "version=$OPENSSL_VERSION" >> $GITHUB_OUTPUT
-          echo "tar=$OPENSSL_TAR" >> $GITHUB_OUTPUT
-          echo "Selected OpenSSL version: $OPENSSL_VERSION"
-
-      - name: Download and build OpenSSL (latest stable)
+      - name: Download and build latest OpenSSL from GitHub
+        id: openssl-build
         run: |
           cd /tmp
-          OPENSSL_VERSION=${{ steps.openssl-latest.outputs.version }}
-          OPENSSL_TAR=${{ steps.openssl-latest.outputs.tar }}
           
-          echo "Downloading OpenSSL $OPENSSL_VERSION"
-          wget https://www.openssl.org/source/$OPENSSL_TAR
-          tar -xzf $OPENSSL_TAR
-          cd openssl-$OPENSSL_VERSION
+          # 从 GitHub 获取最新 release 源码包
+          echo "Fetching latest OpenSSL release from GitHub..."
+          OPENSSL_URL=$(curl -s https://api.github.com/repos/openssl/openssl/releases/latest | grep -oP '"tarball_url":\s*"\K[^"]+')
           
+          if [ -z "$OPENSSL_URL" ]; then
+            echo "Failed to get release URL, using master branch"
+            OPENSSL_URL="https://github.com/openssl/openssl/archive/master.tar.gz"
+          fi
+          
+          echo "Downloading from: $OPENSSL_URL"
+          wget "$OPENSSL_URL" -O openssl-latest.tar.gz
+          tar -xzf openssl-latest.tar.gz
+          
+          # 进入解压后的目录
+          cd openssl-*
+          
+          # 获取 OpenSSL 版本号
+          OPENSSL_VERSION=$(./Configure --version 2>&1 | head -1 | awk '{print $2}')
+          echo "version=$OPENSSL_VERSION" >> $GITHUB_OUTPUT
+          echo "Building OpenSSL version: $OPENSSL_VERSION"
+          
+          # 配置编译
           ./config \
             --prefix=/usr/local/openssl-pqc \
             --openssldir=/usr/local/openssl-pqc \
@@ -109,7 +114,7 @@ jobs:
       - name: Package binary
         run: |
           NGINX_VERSION=${{ steps.nginx-latest.outputs.version }}
-          OPENSSL_VERSION=${{ steps.openssl-latest.outputs.version }}
+          OPENSSL_VERSION=${{ steps.openssl-build.outputs.version }}
           
           mkdir -p nginx-pqc/usr/local/nginx
           cp nginx-$NGINX_VERSION/objs/nginx nginx-pqc/usr/local/nginx/
@@ -138,7 +143,7 @@ jobs:
           
           cat > nginx-pqc/VERSION << EOF
           Nginx: $NGINX_VERSION
-          OpenSSL: $OPENSSL_VERSION
+          OpenSSL: ${OPENSSL_VERSION:-latest}
           Build Date: $(date -u +"%Y-%m-%d %H:%M:%S UTC")
           EOF
           
@@ -155,14 +160,14 @@ jobs:
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: nginx-${{ steps.nginx-latest.outputs.version }}-openssl-${{ steps.openssl-latest.outputs.version }}
-          name: "Nginx ${{ steps.nginx-latest.outputs.version }} + OpenSSL ${{ steps.openssl-latest.outputs.version }} (PQC)"
+          tag_name: nginx-${{ steps.nginx-latest.outputs.version }}-openssl-${{ steps.openssl-build.outputs.version }}
+          name: "Nginx ${{ steps.nginx-latest.outputs.version }} + OpenSSL ${{ steps.openssl-build.outputs.version }}"
           body: |
-            ## Nginx with Post-Quantum Cryptography Support
+            ## Nginx with Latest OpenSSL (Post-Quantum Support)
             
             ### Components:
             - **Nginx**: ${{ steps.nginx-latest.outputs.version }}
-            - **OpenSSL**: ${{ steps.openssl-latest.outputs.version }} (latest stable)
+            - **OpenSSL**: ${{ steps.openssl-build.outputs.version }} (latest from GitHub)
             - **Platform**: Linux AMD64
             - **TLS**: 1.3 with PQC support
             
@@ -171,6 +176,7 @@ jobs:
             - Stream module (TCP/UDP proxy)
             - RealIP module
             - Stub status module
+            - Custom OpenSSL with post-quantum cryptography support
             
             ### Installation:
             ```bash
