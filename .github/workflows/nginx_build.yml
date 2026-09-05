@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest       # 始终用 GitHub 最新系统镜像
+    runs-on: ubuntu-latest
     permissions:
       contents: write
       packages: write
@@ -16,10 +16,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: 更新系统到最新 + 安装构建依赖
+      - name: 缓存APT包
+        uses: actions/cache@v4
+        id: apt-cache
+        with:
+          path: /var/cache/apt/archives
+          key: ${{ runner.os }}-apt-${{ hashFiles('**/apt-packages.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-apt-
+
+      - name: 安装构建依赖
         run: |
           sudo apt-get update
-          sudo apt-get upgrade -y        # 系统依赖全部升到最新
           sudo apt-get install -y \
             build-essential \
             git \
@@ -30,17 +38,64 @@ jobs:
             zlib1g-dev \
             ca-certificates
 
-      - name: Get latest Nginx version
+      - name: 缓存OpenSSL源码
+        id: cache-openssl
+        uses: actions/cache@v4
+        with:
+          path: /tmp/openssl-source
+          key: ${{ runner.os }}-openssl-${{ hashFiles('**/openssl-version.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-openssl-
+
+      - name: Get latest Nginx version from GitHub
         id: nginx-latest
         run: |
-          NGINX_VERSION=$(curl -s https://nginx.org/en/download.html | grep -oP 'nginx-\K[\d.]+' | head -1)
+          # 从GitHub获取最新Nginx稳定版tag
+          NGINX_VERSION=$(curl -s https://api.github.com/repos/nginx/nginx/tags | grep -oP '"name":\s*"release-\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          if [ -z "$NGINX_VERSION" ]; then
+            # fallback: 从nginx.org获取
+            NGINX_VERSION=$(curl -s https://nginx.org/en/download.html | grep -oP 'nginx-\K[\d.]+' | head -1)
+          fi
           echo "version=$NGINX_VERSION" >> $GITHUB_OUTPUT
           echo "Selected Nginx version: $NGINX_VERSION"
+
+      - name: 缓存Nginx源码
+        id: cache-nginx
+        uses: actions/cache@v4
+        with:
+          path: nginx-${{ steps.nginx-latest.outputs.version }}
+          key: ${{ runner.os }}-nginx-${{ steps.nginx-latest.outputs.version }}
+          restore-keys: |
+            ${{ runner.os }}-nginx-
+
+      - name: Clone Nginx source from GitHub
+        if: steps.cache-nginx.outputs.cache-hit != 'true'
+        run: |
+          NGINX_VERSION=${{ steps.nginx-latest.outputs.version }}
+          # 克隆nginx仓库并切换到指定版本
+          git clone --depth 1 --branch release-$NGINX_VERSION https://github.com/nginx/nginx.git nginx-$NGINX_VERSION
+          
+          # 如果tag不存在，尝试从archive下载
+          if [ ! -d "nginx-$NGINX_VERSION" ]; then
+            wget https://github.com/nginx/nginx/archive/refs/tags/release-$NGINX_VERSION.tar.gz
+            tar -xzf release-$NGINX_VERSION.tar.gz
+            mv nginx-release-$NGINX_VERSION nginx-$NGINX_VERSION
+          fi
 
       - name: Download and build latest OpenSSL from GitHub
         id: openssl-build
         run: |
           cd /tmp
+          
+          # 检查缓存
+          if [ -d "openssl-source" ] && [ -f "openssl-source/.built" ]; then
+            echo "Using cached OpenSSL build"
+            sudo cp -r openssl-source/* /usr/local/openssl-pqc/ 2>/dev/null || true
+            OPENSSL_VERSION=$(cat openssl-source/VERSION 2>/dev/null || echo "cached")
+            echo "version=$OPENSSL_VERSION" >> $GITHUB_OUTPUT
+            echo "OPENSSL_VERSION=$OPENSSL_VERSION" >> $GITHUB_ENV
+            exit 0
+          fi
           
           OPENSSL_URL=$(curl -s https://api.github.com/repos/openssl/openssl/releases/latest | grep -oP '"tarball_url":\s*"\K[^"]+')
           
@@ -73,17 +128,22 @@ jobs:
           
           make -j$(nproc)
           sudo make install_sw
-
-      - name: Download Nginx source
-        run: |
-          NGINX_VERSION=${{ steps.nginx-latest.outputs.version }}
-          wget https://nginx.org/download/nginx-$NGINX_VERSION.tar.gz
-          tar -xzf nginx-$NGINX_VERSION.tar.gz
+          
+          # 保存到缓存目录
+          mkdir -p /tmp/openssl-source
+          sudo cp -r /usr/local/openssl-pqc/* /tmp/openssl-source/
+          echo "$OPENSSL_VERSION" > /tmp/openssl-source/VERSION
+          touch /tmp/openssl-source/.built
 
       - name: Configure and build Nginx
         run: |
           NGINX_VERSION=${{ steps.nginx-latest.outputs.version }}
           cd nginx-$NGINX_VERSION
+          
+          # 生成configure脚本（从GitHub克隆的源码需要先运行auto/configure）
+          if [ ! -f "configure" ]; then
+            ./auto/configure --help > /dev/null 2>&1 || true
+          fi
           
           ./configure \
             --prefix=/usr/local/nginx \
@@ -118,6 +178,14 @@ jobs:
           sed -i 's/-Werror//g' auto/cc/gcc
           make -j$(nproc)
 
+      - name: 缓存Nginx编译产物
+        uses: actions/cache@v4
+        with:
+          path: nginx-${{ steps.nginx-latest.outputs.version }}/objs
+          key: ${{ runner.os }}-nginx-objs-${{ steps.nginx-latest.outputs.version }}-${{ steps.openssl-build.outputs.version }}
+          restore-keys: |
+            ${{ runner.os }}-nginx-objs-${{ steps.nginx-latest.outputs.version }}-
+
       - name: Test Nginx binary
         run: |
           cd nginx-${{ steps.nginx-latest.outputs.version }}
@@ -128,7 +196,10 @@ jobs:
         id: extract-openssl
         run: |
           cd nginx-${{ steps.nginx-latest.outputs.version }}
-          OPENSSL_VER=$(./objs/nginx -V 2>&1 | grep -oP 'built with OpenSSL \K[0-9]+\.[0-9]+\.[0-9]+')
+          OPENSSL_VER=$(./objs/nginx -V 2>&1 | grep -oP 'built with OpenSSL \K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+          if [ -z "$OPENSSL_VER" ]; then
+            OPENSSL_VER="${{ steps.openssl-build.outputs.version }}"
+          fi
           echo "version=$OPENSSL_VER" >> $GITHUB_OUTPUT
           echo "Extracted OpenSSL version: $OPENSSL_VER"
 
