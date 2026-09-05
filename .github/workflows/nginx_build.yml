@@ -47,40 +47,20 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-openssl-
 
-      - name: Get latest Nginx version from GitHub
+      - name: Get latest Nginx version
         id: nginx-latest
         run: |
-          # 从GitHub获取最新Nginx稳定版tag
-          NGINX_VERSION=$(curl -s https://api.github.com/repos/nginx/nginx/tags | grep -oP '"name":\s*"release-\K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-          if [ -z "$NGINX_VERSION" ]; then
-            # fallback: 从nginx.org获取
-            NGINX_VERSION=$(curl -s https://nginx.org/en/download.html | grep -oP 'nginx-\K[\d.]+' | head -1)
-          fi
+          NGINX_VERSION=$(curl -s https://nginx.org/en/download.html | grep -oP 'nginx-\K[\d.]+' | head -1)
           echo "version=$NGINX_VERSION" >> $GITHUB_OUTPUT
           echo "Selected Nginx version: $NGINX_VERSION"
 
-      - name: 缓存Nginx源码
-        id: cache-nginx
-        uses: actions/cache@v4
-        with:
-          path: nginx-${{ steps.nginx-latest.outputs.version }}
-          key: ${{ runner.os }}-nginx-${{ steps.nginx-latest.outputs.version }}
-          restore-keys: |
-            ${{ runner.os }}-nginx-
-
-      - name: Clone Nginx source from GitHub
-        if: steps.cache-nginx.outputs.cache-hit != 'true'
+      - name: 下载Nginx源码
+        id: download-nginx
         run: |
           NGINX_VERSION=${{ steps.nginx-latest.outputs.version }}
-          # 克隆nginx仓库并切换到指定版本
-          git clone --depth 1 --branch release-$NGINX_VERSION https://github.com/nginx/nginx.git nginx-$NGINX_VERSION
-          
-          # 如果tag不存在，尝试从archive下载
-          if [ ! -d "nginx-$NGINX_VERSION" ]; then
-            wget https://github.com/nginx/nginx/archive/refs/tags/release-$NGINX_VERSION.tar.gz
-            tar -xzf release-$NGINX_VERSION.tar.gz
-            mv nginx-release-$NGINX_VERSION nginx-$NGINX_VERSION
-          fi
+          wget https://nginx.org/download/nginx-$NGINX_VERSION.tar.gz
+          tar -xzf nginx-$NGINX_VERSION.tar.gz
+          echo "下载完成: nginx-$NGINX_VERSION"
 
       - name: Download and build latest OpenSSL from GitHub
         id: openssl-build
@@ -140,12 +120,6 @@ jobs:
           NGINX_VERSION=${{ steps.nginx-latest.outputs.version }}
           cd nginx-$NGINX_VERSION
           
-          # 从GitHub克隆的源码需要先运行auto/configure来生成configure脚本
-          if [ ! -f "configure" ]; then
-            ./auto/configure
-          fi
-          
-          # 现在使用生成的configure脚本
           ./configure \
             --prefix=/usr/local/nginx \
             --with-compat \
