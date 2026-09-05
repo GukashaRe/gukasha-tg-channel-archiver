@@ -140,11 +140,12 @@ jobs:
           NGINX_VERSION=${{ steps.nginx-latest.outputs.version }}
           cd nginx-$NGINX_VERSION
           
-          # 生成configure脚本（从GitHub克隆的源码需要先运行auto/configure）
+          # 从GitHub克隆的源码需要先运行auto/configure来生成configure脚本
           if [ ! -f "configure" ]; then
-            ./auto/configure --help > /dev/null 2>&1 || true
+            ./auto/configure
           fi
           
+          # 现在使用生成的configure脚本
           ./configure \
             --prefix=/usr/local/nginx \
             --with-compat \
