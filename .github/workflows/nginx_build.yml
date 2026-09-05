@@ -50,17 +50,47 @@ jobs:
       - name: Get latest Nginx version
         id: nginx-latest
         run: |
-          NGINX_VERSION=$(curl -s https://nginx.org/en/download.html | grep -oP 'nginx-\K[\d.]+' | head -1)
+          # 从nginx.org获取最新稳定版，清理版本号
+          NGINX_VERSION=$(curl -s https://nginx.org/en/download.html | grep -oP 'nginx-\K[0-9]+\.[0-9]+\.[0-9]+' | head -1 | tr -d '\n\r' | xargs)
+          if [ -z "$NGINX_VERSION" ] || [ ${#NGINX_VERSION} -gt 15 ]; then
+            # 如果获取失败或格式不对，从GitHub获取
+            NGINX_VERSION=$(curl -s https://api.github.com/repos/nginx/nginx/tags | grep -oP '"name":\s*"release-\K[0-9]+\.[0-9]+\.[0-9]+' | head -1 | tr -d '\n\r' | xargs)
+          fi
+          # 再次验证版本号格式
+          if [[ ! "$NGINX_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "ERROR: Invalid version format: $NGINX_VERSION"
+            exit 1
+          fi
           echo "version=$NGINX_VERSION" >> $GITHUB_OUTPUT
           echo "Selected Nginx version: $NGINX_VERSION"
 
+      - name: 缓存Nginx源码
+        id: cache-nginx-source
+        uses: actions/cache@v4
+        with:
+          path: nginx-${{ steps.nginx-latest.outputs.version }}
+          key: ${{ runner.os }}-nginx-source-${{ steps.nginx-latest.outputs.version }}
+          restore-keys: |
+            ${{ runner.os }}-nginx-source-
+
       - name: 下载Nginx源码
-        id: download-nginx
+        if: steps.cache-nginx-source.outputs.cache-hit != 'true'
         run: |
-          NGINX_VERSION=${{ steps.nginx-latest.outputs.version }}
-          wget https://nginx.org/download/nginx-$NGINX_VERSION.tar.gz
-          tar -xzf nginx-$NGINX_VERSION.tar.gz
-          echo "下载完成: nginx-$NGINX_VERSION"
+          NGINX_VERSION="${{ steps.nginx-latest.outputs.version }}"
+          # 去除可能的空白字符
+          NGINX_VERSION=$(echo "$NGINX_VERSION" | xargs)
+          echo "Downloading nginx-${NGINX_VERSION}.tar.gz"
+          
+          # 尝试从nginx.org下载
+          if wget "https://nginx.org/download/nginx-${NGINX_VERSION}.tar.gz"; then
+            echo "Successfully downloaded from nginx.org"
+          else
+            echo "Failed to download from nginx.org, trying GitHub..."
+            wget "https://github.com/nginx/nginx/archive/refs/tags/release-${NGINX_VERSION}.tar.gz" -O "nginx-${NGINX_VERSION}.tar.gz"
+          fi
+          
+          tar -xzf "nginx-${NGINX_VERSION}.tar.gz"
+          echo "下载完成: nginx-${NGINX_VERSION}"
 
       - name: Download and build latest OpenSSL from GitHub
         id: openssl-build
@@ -115,10 +145,24 @@ jobs:
           echo "$OPENSSL_VERSION" > /tmp/openssl-source/VERSION
           touch /tmp/openssl-source/.built
 
+      - name: 缓存Nginx编译产物
+        id: cache-nginx-objs
+        uses: actions/cache@v4
+        with:
+          path: |
+            nginx-${{ steps.nginx-latest.outputs.version }}/objs
+            nginx-${{ steps.nginx-latest.outputs.version }}/Makefile
+          key: ${{ runner.os }}-nginx-objs-${{ steps.nginx-latest.outputs.version }}-${{ steps.openssl-build.outputs.version }}
+          restore-keys: |
+            ${{ runner.os }}-nginx-objs-${{ steps.nginx-latest.outputs.version }}-
+            ${{ runner.os }}-nginx-objs-
+
       - name: Configure and build Nginx
+        if: steps.cache-nginx-objs.outputs.cache-hit != 'true'
         run: |
-          NGINX_VERSION=${{ steps.nginx-latest.outputs.version }}
-          cd nginx-$NGINX_VERSION
+          NGINX_VERSION="${{ steps.nginx-latest.outputs.version }}"
+          NGINX_VERSION=$(echo "$NGINX_VERSION" | xargs)
+          cd "nginx-$NGINX_VERSION"
           
           ./configure \
             --prefix=/usr/local/nginx \
@@ -153,24 +197,20 @@ jobs:
           sed -i 's/-Werror//g' auto/cc/gcc
           make -j$(nproc)
 
-      - name: 缓存Nginx编译产物
-        uses: actions/cache@v4
-        with:
-          path: nginx-${{ steps.nginx-latest.outputs.version }}/objs
-          key: ${{ runner.os }}-nginx-objs-${{ steps.nginx-latest.outputs.version }}-${{ steps.openssl-build.outputs.version }}
-          restore-keys: |
-            ${{ runner.os }}-nginx-objs-${{ steps.nginx-latest.outputs.version }}-
-
       - name: Test Nginx binary
         run: |
-          cd nginx-${{ steps.nginx-latest.outputs.version }}
+          NGINX_VERSION="${{ steps.nginx-latest.outputs.version }}"
+          NGINX_VERSION=$(echo "$NGINX_VERSION" | xargs)
+          cd "nginx-$NGINX_VERSION"
           ./objs/nginx -v
           ./objs/nginx -V 2>&1 | grep "built with OpenSSL"
 
       - name: Extract OpenSSL version from nginx binary
         id: extract-openssl
         run: |
-          cd nginx-${{ steps.nginx-latest.outputs.version }}
+          NGINX_VERSION="${{ steps.nginx-latest.outputs.version }}"
+          NGINX_VERSION=$(echo "$NGINX_VERSION" | xargs)
+          cd "nginx-$NGINX_VERSION"
           OPENSSL_VER=$(./objs/nginx -V 2>&1 | grep -oP 'built with OpenSSL \K[0-9]+\.[0-9]+\.[0-9]+' | head -1)
           if [ -z "$OPENSSL_VER" ]; then
             OPENSSL_VER="${{ steps.openssl-build.outputs.version }}"
@@ -180,12 +220,13 @@ jobs:
 
       - name: Package binary
         run: |
-          NGINX_VERSION=${{ steps.nginx-latest.outputs.version }}
-          OPENSSL_VERSION=${{ steps.extract-openssl.outputs.version }}
+          NGINX_VERSION="${{ steps.nginx-latest.outputs.version }}"
+          NGINX_VERSION=$(echo "$NGINX_VERSION" | xargs)
+          OPENSSL_VERSION="${{ steps.extract-openssl.outputs.version }}"
           
           mkdir -p nginx-pqc/usr/local/nginx
-          cp nginx-$NGINX_VERSION/objs/nginx nginx-pqc/usr/local/nginx/
-          cp -r nginx-$NGINX_VERSION/conf nginx-pqc/usr/local/nginx/
+          cp "nginx-$NGINX_VERSION/objs/nginx" nginx-pqc/usr/local/nginx/
+          cp -r "nginx-$NGINX_VERSION/conf" nginx-pqc/usr/local/nginx/
           
           mkdir -p nginx-pqc/usr/local/nginx/logs
           mkdir -p nginx-pqc/usr/local/nginx/client_body_temp
